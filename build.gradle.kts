@@ -1,14 +1,18 @@
 import org.gradle.api.tasks.bundling.Zip
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 plugins {
     id("java")
     id("application")
     id("edu.sc.seis.launch4j") version "3.0.6"
     id("com.github.johnrengelman.shadow") version "8.1.1"
+    application
+    id("org.beryx.jlink") version "2.26.0"
 }
 
 group = "com.telemetryparser"
-version = "1.0-SNAPSHOT"
+version = "1.0"
 
 repositories {
     mavenCentral()
@@ -23,23 +27,34 @@ dependencies {
     implementation("com.formdev:flatlaf-intellij-themes:3.5.4")
     implementation("com.formdev:flatlaf-extras:3.5.4")
     implementation("net.sourceforge.tess4j:tess4j:5.13.0")
+    implementation("org.slf4j:slf4j-simple:2.0.7")
 }
 
 application {
-    mainClass.set("com.telemetryparser.StreamParser")
+    mainClass.set("com.telemetryparser.Main")
 }
 
 launch4j {
-    mainClassName = "com.telemetryparser.StreamParser"
+    mainClassName = "com.telemetryparser.Main"
     icon = "${projectDir}/icons/TelemetryParser.ico"
+    outfile = "TelemetryParser.exe"
+    requires64Bit = true
+    stayAlive = false
+    headerType = "console"
+    jvmOptions = listOf("--enable-preview")
+    bundledJrePath = file("$projectDir/build/jre").absolutePath
 }
 
-tasks.register<edu.sc.seis.launch4j.tasks.Launch4jLibraryTask>("createFastStart") {
-    dependsOn("shadowJar")
+
+val createFastStart by tasks.registering(edu.sc.seis.launch4j.tasks.Launch4jLibraryTask::class) {
+    dependsOn(createJre)
+
     outfile.set("TelemetryParser.exe")
-    mainClassName.set("com.telemetryparser.StreamParser")
+    mainClassName.set("com.telemetryparser.Main")
     icon.set("$projectDir/icons/TelemetryParser.ico")
     fileDescription.set("The lightning fast implementation")
+
+    bundledJrePath = file("$projectDir/build/jre").absolutePath
 
     doLast {
         println("The EXE is located at: ${outfile.get()}")
@@ -51,15 +66,85 @@ tasks.register<edu.sc.seis.launch4j.tasks.Launch4jLibraryTask>("createFastStart"
     }
 }
 
+
+val createJre by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Generates a custom Java runtime using jlink"
+
+    val javaHome = System.getenv("JAVA_HOME") ?: error("JAVA_HOME is not set")
+
+    doFirst {
+        val jreDir = file("build/jre")
+        if (jreDir.exists()) {
+            println("Deleting existing JRE directory at: ${jreDir.absolutePath}")
+            jreDir.deleteRecursively()
+        }
+    }
+
+    commandLine(
+            "$javaHome/bin/jlink",
+            "--module-path", "$javaHome/jmods",
+            "--add-modules", "java.base,java.desktop,java.logging,jdk.unsupported",
+            "--output", "build/jre",
+            "--no-header-files",
+            "--no-man-pages",
+            "--strip-debug",
+            "--compress=2"
+    )
+
+
+    doLast {
+        println("Custom JRE created at: build/jre")
+    }
+}
+
+val buildDate: String = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"))
+
 tasks.register<Zip>("buildExe") {
-    dependsOn("createFastStart")
+    dependsOn(createFastStart)
+
     from("$projectDir/build/launch4j")
 
-    destinationDirectory.set(file("$projectDir/distributions"))
+    from("$projectDir/build/jre") {
+        into("jre")
+    }
 
-    archiveFileName.set("TelemetryParser-$version.zip")
+    from("$projectDir/rois.properties") {
+        into("")
+    }
+
+    from("$projectDir/tessdata") {
+        into("tessdata")
+    }
+
+    from("$projectDir/fonts") {
+        into("fonts")
+    }
+
+    destinationDirectory.set(file("$projectDir/releases"))
+    archiveFileName.set("Win64-TelemetryParser-${version}-$buildDate.zip")}
+
+
+
+
+tasks.withType<JavaCompile> {
+    options.compilerArgs.add("--enable-preview")
+}
+
+tasks.withType<Test> {
+    jvmArgs("--enable-preview")
+}
+
+tasks.withType<JavaExec> {
+    jvmArgs("--enable-preview")
 }
 
 tasks.test {
     useJUnitPlatform()
+}
+
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
 }
